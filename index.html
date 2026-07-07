@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Faillist Processing Portal | SPSLT</title>
+    <!-- Mammoth.js for client-side .docx parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.21/mammoth.browser.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; padding: 20px; }
+        .container { max-width: 100%; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .controls { margin-bottom: 20px; display: flex; gap: 15px; align-items: center; }
+        button { background-color: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background-color: #2980b9; }
+        
+        /* Table Styling */
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
+        th, td { border: 1px solid #bdc3c7; padding: 8px; text-align: center; }
+        th { background-color: #ecf0f1; position: sticky; top: 0; }
+        
+        /* Specific Cell States */
+        .editable { background-color: #fffbea; cursor: text; border: 1px dashed #f1c40f; }
+        .absent-alert { background-color: #ffcccc; color: #c0392b; font-weight: bold; animation: blinker 2s linear infinite; }
+        .highlight-failed { background-color: #ff9999 !important; font-weight: bold; color: #900; }
+        
+        @keyframes blinker { 50% { opacity: 0.7; } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>SPSLT Form 5 Faillist Processing Portal</h2>
+    
+    <div class="controls">
+        <input type="file" id="upload-docx" accept=".docx" />
+        <button id="process-btn" style="display: none;" onclick="runHighlightLogic()">Run Faillist Logic</button>
+    </div>
+
+    <div id="table-container">
+        <p style="color: #7f8c8d;">Please upload the Faillist (S5).docx file to begin.</p>
+    </div>
+</div>
+
+<script>
+    // --- Configuration based on Requirements ---
+    const headers = [
+        "NAME", "CLASS", // Assuming these exist before subjects
+        "ENGLISH", "CHINESE", "MATHS.", "MOD. 1/2", "C & S DEV", "B.A.F.S.", 
+        "ECONOMICS", "CHI. HIST", "V. ARTS", "GEOGRAPHY", "HISTORY", "BIOLOGY", 
+        "CHI. LIT.", "ENG. LIT.", "I.C.T.", "T.H.S.", "PHYSICS", "CHEMISTRY", 
+        "H.M.S.C.", "E.R.S.", "AVERAGE", "P"
+    ];
+    
+    const ignoredSubjects = ["MOD. 1/2", "AVERAGE", "P"];
+    const coreSubjects = ["ENGLISH", "CHINESE", "MATHS.", "C & S DEV"];
+    const otherSubjects = headers.filter(h => 
+        !ignoredSubjects.includes(h) && 
+        !coreSubjects.includes(h) && 
+        h !== "NAME" && h !== "CLASS"
+    );
+
+    let activeData = [];
+
+    // --- Step 1: File Upload & Parsing ---
+    document.getElementById('upload-docx').addEventListener('change', function(event) {
+        let reader = new FileReader();
+        reader.onload = function(event) {
+            let arrayBuffer = reader.result;
+            mammoth.convertToHtml({arrayBuffer: arrayBuffer})
+                .then(displayResult)
+                .catch(handleError);
+        };
+        reader.readAsArrayBuffer(event.target.files[0]);
+    });
+
+    function displayResult(result) {
+        // Mammoth extracts tables as raw HTML. We parse it into memory.
+        let tempDiv = document.createElement('div');
+        tempDiv.innerHTML = result.value;
+        let table = tempDiv.querySelector('table');
+        
+        if (!table) {
+            alert("No table found in the document. Please ensure it's a standard Word table.");
+            return;
+        }
+
+        activeData = [];
+        let rows = table.querySelectorAll('tr');
+        
+        // Skip header row in Word doc, start at index 1 mapping to our clean headers
+        for (let i = 1; i < rows.length; i++) {
+            let cells = rows[i].querySelectorAll('td, th');
+            let rowData = {};
+            // Map cells to our defined headers (Warning: Assumes Word columns match array index exactly)
+            headers.forEach((h, index) => {
+                if(cells[index]) {
+                    rowData[h] = cells[index].innerText.trim();
+                } else {
+                    rowData[h] = "";
+                }
+            });
+            activeData.push(rowData);
+        }
+
+        renderInteractiveTable();
+        document.getElementById('process-btn').style.display = 'block';
+    }
+
+    // --- Step 2 & 3: Rendering & Editing "ABSENT" ---
+    function renderInteractiveTable() {
+        let container = document.getElementById('table-container');
+        let html = `<table id="data-table"><thead><tr>`;
+        
+        // Render Headers (excluding ignored)
+        headers.forEach(h => {
+            if (!ignoredSubjects.includes(h)) {
+                html += `<th>${h}</th>`;
+            }
+        });
+        html += `</tr></thead><tbody>`;
+
+        // Render Rows
+        activeData.forEach((row, rowIndex) => {
+            html += `<tr>`;
+            headers.forEach(h => {
+                if (ignoredSubjects.includes(h)) return; // Skip ignored columns
+
+                let cellValue = row[h];
+                let cssClass = "editable";
+                
+                // Highlight ABSENT immediately
+                if (cellValue.toUpperCase() === "ABSENT") {
+                    cssClass += " absent-alert";
+                }
+
+                // Only subjects are editable, not Name/Class
+                if(h === "NAME" || h === "CLASS") {
+                    html += `<td>${cellValue}</td>`;
+                } else {
+                    html += `<td class="${cssClass}" contenteditable="true" 
+                             data-row="${rowIndex}" data-subject="${h}"
+                             onblur="handleCellEdit(this)">${cellValue}</td>`;
+                }
+            });
+            html += `</tr>`;
+        });
+        
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+    }
+
+    // --- Step 4: Auto-formatting Edited Marks (<50) ---
+    function handleCellEdit(cell) {
+        let val = cell.innerText.trim().toUpperCase();
+        let rowIndex = cell.getAttribute('data-row');
+        let subject = cell.getAttribute('data-subject');
+
+        // Remove the visual ABSENT alert once edited
+        if (val !== "ABSENT") {
+            cell.classList.remove('absent-alert');
+        }
+
+        // Check if it's a number and needs formatting
+        if (!isNaN(val) && val !== "") {
+            let num = parseFloat(val);
+            if (num < 50) {
+                val = `(${num})`; // Wrap in brackets
+                cell.innerText = val; // Update UI
+            }
+        }
+        
+        // Update internal data store
+        activeData[rowIndex][subject] = val;
+    }
+
+    // --- Helper for evaluation ---
+    function isFailed(mark) {
+        if (!mark) return false;
+        return mark.includes('(') && mark.includes(')');
+    }
+
+    function extractNumber(mark) {
+        // Extracts 45 from "(45)"
+        return parseFloat(mark.replace(/[^0-9.]/g, ''));
+    }
+
+    // --- Step 5: The "Toughest" Logic 1 & Logic 2 ---
+    function runHighlightLogic() {
+        let tableRows = document.getElementById('data-table').querySelectorAll('tbody tr');
+
+        tableRows.forEach((tr, index) => {
+            let studentData = activeData[index];
+            
+            // Clear previous highlights
+            let cells = tr.querySelectorAll('td');
+            cells.forEach(c => c.classList.remove('highlight-failed'));
+
+            // LOGIC 1: Highlight all failed Core Subjects
+            coreSubjects.forEach(sub => {
+                if (isFailed(studentData[sub])) {
+                    let td = tr.querySelector(`td[data-subject="${sub}"]`);
+                    if (td) td.classList.add('highlight-failed');
+                }
+            });
+
+            // LOGIC 2: Other Subjects Logic
+            let passedCount = 0;
+            let failedOthersList = [];
+
+            otherSubjects.forEach(sub => {
+                let mark = studentData[sub];
+                if (mark === "" || mark === "ABSENT") return; // Blank = not taken
+
+                if (!isFailed(mark)) {
+                    passedCount++; // Count as pass
+                } else {
+                    // It's a fail. E.R.S. is NEVER highlighted, so don't add to list
+                    if (sub !== "E.R.S.") {
+                        failedOthersList.push({
+                            subject: sub,
+                            markValue: extractNumber(mark),
+                            tdNode: tr.querySelector(`td[data-subject="${sub}"]`)
+                        });
+                    }
+                }
+            });
+
+            // Sort failed subjects by highest mark descending to find the "best of the failed"
+            failedOthersList.sort((a, b) => b.markValue - a.markValue);
+
+            // Apply Highlighting based on passes
+            if (passedCount >= 2) {
+                // No action needed
+            } else if (passedCount === 1) {
+                // Highlight 1 (the highest failed)
+                if (failedOthersList.length > 0) {
+                    failedOthersList[0].tdNode.classList.add('highlight-failed');
+                }
+            } else if (passedCount === 0) {
+                // Highlight 2 (the top 2 highest failed)
+                if (failedOthersList.length > 0) failedOthersList[0].tdNode.classList.add('highlight-failed');
+                if (failedOthersList.length > 1) failedOthersList[1].tdNode.classList.add('highlight-failed');
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
