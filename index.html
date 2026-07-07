@@ -12,12 +12,18 @@
         .controls { margin-bottom: 20px; display: flex; gap: 15px; align-items: center; }
         button { background-color: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         button:hover { background-color: #2980b9; }
+        #sort-failed-btn { background-color: #e67e22; }
+        #sort-failed-btn:hover { background-color: #d35400; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; table-layout: fixed;}
         th, td { border: 1px solid #bdc3c7; padding: 8px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
         th { background-color: #ecf0f1; position: sticky; top: 0; }
         .editable { background-color: #fffbea; cursor: text; }
         .absent-alert { background-color: #ffcccc; color: #c0392b; font-weight: bold; animation: blinker 2s linear infinite; }
+        
+        /* Highlight Classes */
         .highlight-failed { background-color: #ff9999 !important; font-weight: bold; color: #900; }
+        .highlight-passed { background-color: #d4edda !important; } /* Green row highlight */
+        
         @keyframes blinker { 50% { opacity: 0.7; } }
     </style>
 </head>
@@ -28,6 +34,7 @@
     <div class="controls">
         <input type="file" id="upload-docx" accept=".docx" />
         <button id="process-btn" style="display: none;" onclick="runHighlightLogic()">Run Faillist Logic</button>
+        <button id="sort-failed-btn" style="display: none;" onclick="showSortedFailedStudents()">View Failed Students (Sorted by Avg)</button>
     </div>
     <div id="table-container">
         <p style="color: #7f8c8d;">Please upload the Faillist (S5).docx file to begin.</p>
@@ -35,17 +42,16 @@
 </div>
 
 <script>
-    // --- Configuration based on Requirements ---
+    // --- Configuration ---
     const ignoredSubjects = ["MOD. 1/2", "AVERAGE", "P"];
     const coreSubjects = ["ENGLISH", "CHINESE", "MATHS.", "C & S DEV"];
-    // Define the full header order for parsing
     const fullHeaderOrder = ["ENGLISH", "CHINESE", "MATHS.", "MOD. 1/2", "C & S DEV", "B.A.F.S.", "ECONOMICS", "CHI. HIST", "V. ARTS", "GEOGRAPHY", "HISTORY", "BIOLOGY", "CHI. LIT.", "ENG. LIT.", "I.C.T.", "T.H.S.", "PHYSICS", "CHEMISTRY", "H.M.S.C.", "E.R.S.", "AVERAGE", "P"];
     const displayHeaders = ["CLASS", "NO", "NAME", ...fullHeaderOrder.filter(h => !ignoredSubjects.includes(h))];
     const otherSubjects = fullHeaderOrder.filter(h => !ignoredSubjects.includes(h) && !coreSubjects.includes(h));
 
     let activeData = [];
 
-    // --- Step 1: File Upload & Raw Text Extraction ---
+    // --- File Upload & Raw Text Extraction ---
     document.getElementById('upload-docx').addEventListener('change', function(event) {
         if (!event.target.files.length) return;
         let reader = new FileReader();
@@ -62,14 +68,13 @@
         alert("An error occurred while processing the document: " + err.message);
     }
 
-    // --- NEW: Step 2: Parse Raw Text into Structured Data ---
+    // --- Parse Raw Text ---
     function displayResult(result) {
         const text = result.value;
         const lines = text.split('\n');
         activeData = [];
         let currentClass = "";
 
-        // Define subject start positions (approximated from your file)
         const subjectPositions = {
             "ENGLISH": 25, "CHINESE": 35, "MATHS.": 45, "MOD. 1/2": 55, "C & S DEV": 65,
             "B.A.F.S.": 75, "ECONOMICS": 85, "CHI. HIST": 95, "V. ARTS": 105, "GEOGRAPHY": 115,
@@ -82,46 +87,40 @@
             const trimmedLine = line.trim();
             if (!trimmedLine) continue;
 
-            // Detect class headers like "5A", "5B", etc.
             if (/^5[A-E]\s*$/.test(trimmedLine)) {
                 currentClass = trimmedLine;
                 continue;
             }
 
-            // Check if the line looks like student data (starts with a number)
             if (/^\d+\./.test(trimmedLine)) {
                 let student = { CLASS: currentClass };
-                
-                // Extract class number, e.g., "8."
                 const noMatch = trimmedLine.match(/^(\d+)\.\s+/);
                 student.NO = noMatch ? noMatch[1] : '';
 
-                // Extract name (this is tricky, assume it's between number and first subject)
                 const namePart = trimmedLine.substring(noMatch[0].length, subjectPositions.ENGLISH).trim();
-                student.NAME = namePart.replace(/\s+/g, ' '); // Consolidate multiple spaces in name
+                student.NAME = namePart.replace(/\s+/g, ' ');
 
-                // Extract subject scores based on fixed positions
                 for (const subject in subjectPositions) {
                     const startPos = subjectPositions[subject];
-                    const endPos = startPos + 10; // Assume each field is about 10 chars wide
+                    const endPos = startPos + 10;
                     const score = line.substring(startPos, endPos).trim();
-                    student[subject] = score || ""; // Store as empty string if blank
+                    student[subject] = score || "";
                 }
                 activeData.push(student);
             }
         }
         
         if (activeData.length === 0) {
-            alert("Could not parse any student data from the document. The format may have changed.");
+            alert("Could not parse any student data. The format may have changed.");
             return;
         }
 
         renderInteractiveTable();
         document.getElementById('process-btn').style.display = 'block';
+        document.getElementById('sort-failed-btn').style.display = 'none'; // Hide until logic runs
     }
 
-
-    // --- Step 3 & 4: Rendering & Editing "ABSENT" ---
+    // --- Render Table ---
     function renderInteractiveTable() {
         let container = document.getElementById('table-container');
         let html = `<table id="data-table"><thead><tr>`;
@@ -151,7 +150,7 @@
         container.innerHTML = html;
     }
 
-    // --- Step 5: Auto-formatting Edited Marks (<50) ---
+    // --- Cell Editing ---
     function handleCellEdit(cell) {
         let val = cell.innerText.trim();
         let rowIndex = cell.getAttribute('data-row');
@@ -171,27 +170,31 @@
         activeData[rowIndex][subject] = val;
     }
 
-    // --- Helpers for evaluation ---
+    // --- Helpers ---
     function isFailed(mark) { return typeof mark === 'string' && mark.startsWith('(') && mark.endsWith(')'); }
     function extractNumber(mark) { return parseFloat(mark.replace(/[()]/g, '')); }
 
-    // --- Step 6: The "Toughest" Logic 1 & Logic 2 ---
+    // --- Primary Highlight Logic ---
     function runHighlightLogic() {
         let tableRows = document.getElementById('data-table').querySelectorAll('tbody tr');
 
         tableRows.forEach((tr, index) => {
             let studentData = activeData[index];
+            let hasHighlights = false;
             
+            // Reset row styles
+            tr.classList.remove('highlight-passed');
             tr.querySelectorAll('td').forEach(c => c.classList.remove('highlight-failed'));
 
-            // LOGIC 1: Highlight all failed Core Subjects
+            // LOGIC 1: Core Subjects
             coreSubjects.forEach(sub => {
                 if (isFailed(studentData[sub])) {
                     tr.querySelector(`td[data-subject="${sub}"]`)?.classList.add('highlight-failed');
+                    hasHighlights = true;
                 }
             });
 
-            // LOGIC 2: Other Subjects Logic
+            // LOGIC 2: Other Subjects
             let passedCount = 0;
             let failedOthersList = [];
 
@@ -216,9 +219,88 @@
                 const highlightsNeeded = 2 - passedCount;
                 failedOthersList.slice(0, highlightsNeeded).forEach(item => {
                     item.tdNode?.classList.add('highlight-failed');
+                    hasHighlights = true;
                 });
             }
+
+            // --- NEW: Highlight Passed Rows Green ---
+            if (!hasHighlights) {
+                tr.classList.add('highlight-passed');
+                studentData.isFailedStudent = false; 
+            } else {
+                studentData.isFailedStudent = true;
+            }
         });
+
+        // Show the new sorting button after logic is calculated
+        document.getElementById('sort-failed-btn').style.display = 'block';
+    }
+
+    // --- NEW: Popup Failed Students Sorted by Avg ---
+    function showSortedFailedStudents() {
+        let failedStudents = activeData.filter(s => s.isFailedStudent);
+        
+        if (failedStudents.length === 0) {
+            alert("No failed students to display.");
+            return;
+        }
+
+        // Sort by AVERAGE ascending
+        failedStudents.sort((a, b) => {
+            let avgA = parseFloat(a.AVERAGE) || 0;
+            let avgB = parseFloat(b.AVERAGE) || 0;
+            return avgA - avgB;
+        });
+
+        // Generate HTML for Popup Window
+        let popupWin = window.open('', '_blank', 'width=800,height=600');
+        let html = `
+            <html>
+            <head>
+                <title>Failed Students (Sorted by Avg)</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f9f9f9; }
+                    h2 { color: #2c3e50; }
+                    table { width: 100%; border-collapse: collapse; background: white; font-size: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+                    th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+                    th { background-color: #34495e; color: white; }
+                    tr:nth-child(even) { background-color: #f2f2f2; }
+                </style>
+            </head>
+            <body>
+                <h2>Failed Students (Ascending Average)</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Class</th>
+                            <th>No.</th>
+                            <th>Name</th>
+                            <th>Average</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+
+        failedStudents.forEach(s => {
+            html += `
+                <tr>
+                    <td>${s.CLASS || ''}</td>
+                    <td>${s.NO || ''}</td>
+                    <td>${s.NAME || ''}</td>
+                    <td><strong>${s.AVERAGE || ''}</strong></td>
+                </tr>
+            `;
+        });
+
+        html += `
+                    </tbody>
+                </table>
+            </body>
+            </html>
+        `;
+
+        popupWin.document.write(html);
+        popupWin.document.close();
     }
 </script>
 
