@@ -68,6 +68,16 @@
         alert("An error occurred while processing the document: " + err.message);
     }
 
+    // --- Helpers ---
+    function isFailed(mark) { return typeof mark === 'string' && mark.startsWith('(') && mark.endsWith(')'); }
+    
+    // Safely extract numbers even if they have brackets "(45.5)" -> 45.5
+    function extractNumber(mark) { 
+        if (!mark) return NaN;
+        let cleanedMark = mark.toString().replace(/[()]/g, '');
+        return parseFloat(cleanedMark); 
+    }
+
     // --- Parse Raw Text ---
     function displayResult(result) {
         const text = result.value;
@@ -87,8 +97,19 @@
             const trimmedLine = line.trim();
             if (!trimmedLine) continue;
 
-            if (/^5[A-E]\s*$/.test(trimmedLine)) {
-                currentClass = trimmedLine;
+            // BUG FIX: Detect class names embedded in the header row
+            if (trimmedLine.includes("ENGLISH") && trimmedLine.includes("CHINESE")) {
+                // Match class like "5A", "5B" at the beginning of the string
+                let classMatch = trimmedLine.match(/^([1-6][A-Z])/i); 
+                if (classMatch) {
+                    currentClass = classMatch[1].toUpperCase();
+                }
+                continue;
+            }
+
+            // Fallback: If class is ever on its own line
+            if (/^[1-6][A-Z]\s*$/i.test(trimmedLine)) {
+                currentClass = trimmedLine.trim().toUpperCase();
                 continue;
             }
 
@@ -170,10 +191,6 @@
         activeData[rowIndex][subject] = val;
     }
 
-    // --- Helpers ---
-    function isFailed(mark) { return typeof mark === 'string' && mark.startsWith('(') && mark.endsWith(')'); }
-    function extractNumber(mark) { return parseFloat(mark.replace(/[()]/g, '')); }
-
     // --- Primary Highlight Logic ---
     function runHighlightLogic() {
         let tableRows = document.getElementById('data-table').querySelectorAll('tbody tr');
@@ -223,7 +240,7 @@
                 });
             }
 
-            // --- NEW: Highlight Passed Rows Green ---
+            // Highlight Passed Rows Green
             if (!hasHighlights) {
                 tr.classList.add('highlight-passed');
                 studentData.isFailedStudent = false; 
@@ -232,11 +249,11 @@
             }
         });
 
-        // Show the new sorting button after logic is calculated
+        // Show the sorting button
         document.getElementById('sort-failed-btn').style.display = 'block';
     }
 
-    // --- NEW: Popup Failed Students Sorted by Avg ---
+    // --- Popup Failed Students Sorted by Avg ---
     function showSortedFailedStudents() {
         let failedStudents = activeData.filter(s => s.isFailedStudent);
         
@@ -245,10 +262,15 @@
             return;
         }
 
-        // Sort by AVERAGE ascending
+        // BUG FIX: Sort by AVERAGE ascending using safe number extraction
         failedStudents.sort((a, b) => {
-            let avgA = parseFloat(a.AVERAGE) || 0;
-            let avgB = parseFloat(b.AVERAGE) || 0;
+            let avgA = extractNumber(a.AVERAGE);
+            let avgB = extractNumber(b.AVERAGE);
+            
+            // Push missing/invalid averages to the bottom
+            if (isNaN(avgA)) avgA = 999;
+            if (isNaN(avgB)) avgB = 999;
+            
             return avgA - avgB;
         });
 
